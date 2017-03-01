@@ -260,10 +260,20 @@ class Migration
                     throw new UnknownColumnTypeException($field);
             }
 
-            if ($field->hasDefault() && !$field->isAutoIncrement()) {
-                $default = $field->getDefault();
-                $fieldDefinition[] = "'default' => \"$default\"";
-            }
+            if ($field->hasDefault()) {
+				if(!$field->isAutoIncrement())
+				{
+                	$default = $field->getDefault();
+                	$fieldDefinition[] = "'default' => \"$default\"";
+				}
+			
+            } else {
+            	// FIX not default value in timestamp colunms
+             	$type = $field->getType();
+            	if(Column::TYPE_TIMESTAMP == $type) {
+  					$fieldDefinition[] = "'default' => \"CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP()\""; 
+   				}
+   			}
             //if ($field->isPrimary()) {
             //	$fieldDefinition[] = "'primary' => true";
             //}
@@ -398,31 +408,38 @@ class Migration
 
         // dump data
         if ($exportData == 'always' || $exportData == 'oncreate') {
-            $fileHandler = fopen(self::$_migrationPath . $version->getVersion() . '/' . $table . '.dat', 'w');
+	
+			$fileName = self::$_migrationPath . $version . '/' . $table . '.json';
+
             $cursor = self::$_connection->query('SELECT * FROM '. self::$_connection->escapeIdentifier($table));
             $cursor->setFetchMode(Db::FETCH_ASSOC);
+			$data = [];
+			$i = 0;
+			
             while ($row = $cursor->fetchArray()) {
-                $data = [];
+              $data[$i] = Array();
+
                 foreach ($row as $key => $value) {
                     if (isset($numericFields[$key])) {
                         if ($value === '' || is_null($value)) {
-                            $data[] = 'NULL';
+                            $data[$i][$key] = 'NULL';
                         } else {
-                            $data[] = addslashes($value);
+                            $data[$i][$key] = addslashes($value);
                         }
                     } else {
-                        $data[] = is_null($value) ? "NULL" : addslashes($value);
+                        $data[$i][$key] = is_null($value) ? "NULL" : addslashes($value);
                     }
 
                     unset($value);
                 }
 
-                fputcsv($fileHandler, $data);
-                unset($row);
-                unset($data);
+				unset($row);
+				$i++;
+
             }
 
-            fclose($fileHandler);
+			file_put_contents($fileName, json_encode($data));
+           
         }
 
         return $classData;
@@ -820,27 +837,25 @@ class Migration
      */
     public function batchInsert($tableName, $fields)
     {
-        $migrationData = self::$_migrationPath.$this->_version.'/'.$tableName.'.dat';
+        $migrationData = self::$_migrationPath.$this->_version.'/'.$tableName.'.json';
         if (!file_exists($migrationData)) {
             return; // nothing to do
         }
 
         self::$_connection->begin();
         self::$_connection->delete($tableName);
-        $batchHandler = fopen($migrationData, 'r');
-        while (($line = fgetcsv($batchHandler)) !== false) {
-            $values = array_map(
-                function ($value) {
-                    return null === $value ? null : $value;
-                },
-                $line
-            );
-
-            self::$_connection->insert($tableName, $values, $fields);
-            unset($line);
-        }
-        fclose($batchHandler);
+		
+		$jsonHandler = json_decode(file_get_contents($migrationData), true);
+	
+		foreach($jsonHandler as $k => $v)
+		{
+			$values = array_values($v);
+			$fields = array_keys($v);
+			self::$_connection->insert($tableName, $values, $fields);
+		}
+		
         self::$_connection->commit();
+
     }
 
     /**
